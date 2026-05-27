@@ -1,5 +1,6 @@
 const std = @import("std");
 const config = @import("config.zig");
+const picker = @import("picker.zig");
 
 fn warnIfNoTerminal(io: std.Io, content: []const u8, config_path: []const u8, gpa: std.mem.Allocator) !void {
     var cfg = try config.parse(content, gpa);
@@ -27,12 +28,6 @@ pub fn main(init: std.process.Init) !void {
     }
     const cmd_args = args[i..];
 
-    if (cmd_args.len == 0) {
-        std.process.fatal("Usage: dcd [--config <path>] <name>|add <name> [path]|rm <name>|list", .{});
-    }
-
-    const subcmd = cmd_args[0];
-
     const home = init.environ_map.get("HOME") orelse
         std.process.fatal("HOME not set", .{});
     const config_path = config_path_override orelse blk: {
@@ -40,6 +35,37 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
         break :blk try std.fmt.allocPrint(allocator, "{s}/dcd/config.toml", .{config_base});
     };
+
+    if (cmd_args.len == 0) {
+        const content = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch |err| {
+            std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
+        };
+        const cfg = try config.parse(content, allocator);
+        const term_cmd = cfg.terminal orelse
+            std.process.fatal("No 'terminal' entry in config", .{});
+
+        const picker_entries = try allocator.alloc(picker.Entry, cfg.directories.items.len);
+        for (cfg.directories.items, 0..) |entry, j| {
+            picker_entries[j] = .{ .name = entry.name, .path = entry.path };
+        }
+
+        const selection = try picker.run(picker_entries, init.io, allocator);
+        const idx = selection orelse return;
+
+        const raw_dir = cfg.directories.items[idx].path;
+        const dir = try config.expandHome(raw_dir, home, allocator);
+        const argv = try config.buildArgv(term_cmd, dir, allocator);
+
+        _ = try std.process.spawn(init.io, .{
+            .argv = argv,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
+        return;
+    }
+
+    const subcmd = cmd_args[0];
 
     if (std.mem.eql(u8, subcmd, "add")) {
         if (cmd_args.len < 2) std.process.fatal("Usage: dcd add <name> [path]", .{});
