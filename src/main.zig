@@ -112,11 +112,17 @@ pub fn main(init: std.process.Init) !void {
 
         const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch |err|
             std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
-        const new_content = config.removeEntry(existing, name, allocator) catch |err| switch (err) {
-            error.NameNotFound => std.process.fatal("Unknown name '{s}'", .{name}),
-            else => return err,
-        };
+        const cfg_rm = try config.parse(existing, allocator);
+        const removed_path = config.lookup(cfg_rm, name) orelse
+            std.process.fatal("Unknown name '{s}'", .{name});
+        const new_content = try config.removeEntry(existing, name, allocator);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
+        const stdout = std.Io.File.stdout();
+        try stdout.writeStreamingAll(init.io, "To re-add: dcd add ");
+        try stdout.writeStreamingAll(init.io, name);
+        try stdout.writeStreamingAll(init.io, " ");
+        try stdout.writeStreamingAll(init.io, removed_path);
+        try stdout.writeStreamingAll(init.io, "\n");
         return;
     }
 
