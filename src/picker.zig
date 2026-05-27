@@ -15,10 +15,6 @@ fn fuzzyMatch(query: []const u8, target: []const u8) bool {
     return false;
 }
 
-fn entryMatches(query: []const u8, entry: Entry) bool {
-    return fuzzyMatch(query, entry.name) or fuzzyMatch(query, entry.path);
-}
-
 fn clearLines(tty: std.Io.File, io: std.Io, n: usize) !void {
     var esc: [32]u8 = undefined;
     const seq = try std.fmt.bufPrint(&esc, "\x1b[{d}A\x1b[J", .{n});
@@ -63,7 +59,14 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
         var filtered_len: usize = 0;
         for (entries, 0..) |entry, ei| {
             if (filtered_len >= 64) break;
-            if (entryMatches(query, entry)) {
+            if (fuzzyMatch(query, entry.name)) {
+                filtered[filtered_len] = ei;
+                filtered_len += 1;
+            }
+        }
+        for (entries, 0..) |entry, ei| {
+            if (filtered_len >= 64) break;
+            if (!fuzzyMatch(query, entry.name) and fuzzyMatch(query, entry.path)) {
                 filtered[filtered_len] = ei;
                 filtered_len += 1;
             }
