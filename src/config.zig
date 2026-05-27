@@ -1,8 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const Launch = enum { exec, spawn };
+
 pub const Config = struct {
     terminal: ?[]const u8,
+    launch: Launch,
+    shell: ?[]const u8,
     directories: std.ArrayList(Entry),
 
     pub const Entry = struct {
@@ -14,6 +18,8 @@ pub const Config = struct {
 // NOTE: returned slices point into `content`, caller must keep it alive.
 pub fn parse(content: []const u8, gpa: Allocator) !Config {
     var terminal: ?[]const u8 = null;
+    var launch: Launch = .spawn;
+    var shell: ?[]const u8 = null;
     var directories: std.ArrayList(Config.Entry) = .empty;
     var in_dirs = false;
 
@@ -39,13 +45,20 @@ pub fn parse(content: []const u8, gpa: Allocator) !Config {
         }
 
         if (!in_dirs) {
-            if (std.mem.eql(u8, key, "terminal")) terminal = val;
+            if (std.mem.eql(u8, key, "terminal")) {
+                terminal = val;
+            } else if (std.mem.eql(u8, key, "launch")) {
+                if (std.mem.eql(u8, val, "spawn")) launch = .spawn
+                else if (std.mem.eql(u8, val, "exec")) launch = .exec;
+            } else if (std.mem.eql(u8, key, "shell")) {
+                shell = val;
+            }
         } else {
             try directories.append(gpa, .{ .name = key, .path = val });
         }
     }
 
-    return .{ .terminal = terminal, .directories = directories };
+    return .{ .terminal = terminal, .launch = launch, .shell = shell, .directories = directories };
 }
 
 pub fn lookup(config: Config, name: []const u8) ?[]const u8 {
@@ -112,6 +125,34 @@ test "parse: quoted values" {
     defer cfg.directories.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("~", cfg.directories.items[0].path);
+}
+
+test "parse: launch defaults to spawn" {
+    const content = "[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Launch.spawn, cfg.launch);
+}
+
+test "parse: shell unset is null" {
+    const content = "[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqual(null, cfg.shell);
+}
+
+test "parse: shell = zsh" {
+    const content = "shell = zsh\n[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("zsh", cfg.shell.?);
+}
+
+test "parse: launch = spawn" {
+    const content = "launch = spawn\n[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Launch.spawn, cfg.launch);
 }
 
 test "parse: comments and blank lines are ignored" {

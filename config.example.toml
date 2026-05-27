@@ -1,3 +1,5 @@
+launch = spawn
+
 terminal = "alacritty --working-directory %s"
 
 [directories]

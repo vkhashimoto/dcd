@@ -2,15 +2,32 @@ const std = @import("std");
 const config = @import("config.zig");
 const picker = @import("picker.zig");
 
-fn warnIfNoTerminal(io: std.Io, content: []const u8, config_path: []const u8, gpa: std.mem.Allocator) !void {
-    var cfg = try config.parse(content, gpa);
-    defer cfg.directories.deinit(gpa);
-    if (cfg.terminal == null) {
-        const stderr = std.Io.File.stderr();
-        try stderr.writeStreamingAll(io, "warning: 'terminal' is not set in ");
-        try stderr.writeStreamingAll(io, config_path);
-        try stderr.writeStreamingAll(io, "\n");
-        std.process.exit(1);
+fn execShell(io: std.Io, dir: []const u8, shell: []const u8) noreturn {
+    std.process.setCurrentPath(io, dir) catch |err|
+        std.process.fatal("chdir '{s}': {s}", .{ dir, @errorName(err) });
+    const err = std.process.replace(io, .{ .argv = &.{shell} });
+    std.process.fatal("exec {s}: {s}", .{ shell, @errorName(err) });
+}
+
+fn resolveShell(config_shell: ?[]const u8, env_shell: ?[]const u8) []const u8 {
+    return config_shell orelse env_shell orelse
+        std.process.fatal("$SHELL is not set", .{});
+}
+
+fn doLaunch(cfg: config.Config, io: std.Io, dir: []const u8, allocator: std.mem.Allocator, shell: []const u8) !void {
+    switch (cfg.launch) {
+        .exec => execShell(io, dir, shell),
+        .spawn => {
+            const term_cmd = cfg.terminal orelse
+                std.process.fatal("'terminal' must be set when launch = spawn", .{});
+            const argv = try config.buildArgv(term_cmd, dir, allocator);
+            _ = try std.process.spawn(io, .{
+                .argv = argv,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            });
+        },
     }
 }
 
@@ -41,8 +58,6 @@ pub fn main(init: std.process.Init) !void {
             std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
         };
         const cfg = try config.parse(content, allocator);
-        const term_cmd = cfg.terminal orelse
-            std.process.fatal("No 'terminal' entry in config", .{});
 
         const picker_entries = try allocator.alloc(picker.Entry, cfg.directories.items.len);
         for (cfg.directories.items, 0..) |entry, j| {
@@ -54,14 +69,8 @@ pub fn main(init: std.process.Init) !void {
 
         const raw_dir = cfg.directories.items[idx].path;
         const dir = try config.expandHome(raw_dir, home, allocator);
-        const argv = try config.buildArgv(term_cmd, dir, allocator);
-
-        _ = try std.process.spawn(init.io, .{
-            .argv = argv,
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        });
+        const shell = resolveShell(cfg.shell, init.environ_map.get("SHELL"));
+        try doLaunch(cfg, init.io, dir, allocator, shell);
         return;
     }
 
@@ -83,7 +92,6 @@ pub fn main(init: std.process.Init) !void {
         const config_dir = std.fs.path.dirname(config_path) orelse ".";
         std.Io.Dir.cwd().createDirPath(init.io, config_dir) catch {};
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
-        try warnIfNoTerminal(init.io, new_content, config_path, allocator);
         return;
     }
 
@@ -98,7 +106,6 @@ pub fn main(init: std.process.Init) !void {
             else => return err,
         };
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
-        try warnIfNoTerminal(init.io, new_content, config_path, allocator);
         return;
     }
 
@@ -119,9 +126,6 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    const term_cmd = cfg.terminal orelse
-        std.process.fatal("No 'terminal' entry in config", .{});
-
     const raw_dir = config.lookup(cfg, subcmd) orelse {
         if (cfg.directories.items.len > 0) {
             var names: std.ArrayList([]const u8) = .empty;
@@ -133,12 +137,6 @@ pub fn main(init: std.process.Init) !void {
     };
 
     const dir = try config.expandHome(raw_dir, home, allocator);
-    const argv = try config.buildArgv(term_cmd, dir, allocator);
-
-    _ = try std.process.spawn(init.io, .{
-        .argv = argv,
-        .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .ignore,
-    });
+    const shell = resolveShell(cfg.shell, init.environ_map.get("SHELL"));
+    try doLaunch(cfg, init.io, dir, allocator, shell);
 }
