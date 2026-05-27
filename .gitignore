@@ -1,0 +1,13 @@
+# Zig
+zig-out/
+.zig-cache/
+zig-pkg/
+
+# direnv
+.envrc
+
+# Emacs
+*~
+\#*\#
+.\#*
+*.elc
