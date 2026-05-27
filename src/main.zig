@@ -60,6 +60,8 @@ pub fn main(init: std.process.Init) !void {
         const stdout = std.Io.File.stdout();
         for (cfg.directories.items) |entry| {
             try stdout.writeStreamingAll(init.io, entry.name);
+            try stdout.writeStreamingAll(init.io, "\t");
+            try stdout.writeStreamingAll(init.io, entry.path);
             try stdout.writeStreamingAll(init.io, "\n");
         }
         return;
