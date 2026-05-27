@@ -1,0 +1,7 @@
+terminal = "alacritty --working-directory %s"
+
+[directories]
+code = ~/code
+work = ~/work
+home = ~
+dots = ~/.config
