@@ -109,11 +109,11 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
         // Arrow keys arrive as 3-byte ESC sequences
         if (n >= 3 and input[0] == 0x1b and input[1] == '[') {
             switch (input[2]) {
-                'A' => if (sel > 0) {
-                    sel -= 1;
+                'A' => if (filtered_len > 0) {
+                    sel = if (sel == 0) filtered_len - 1 else sel - 1;
                 },
-                'B' => if (filtered_len > 0 and sel + 1 < filtered_len) {
-                    sel += 1;
+                'B' => if (filtered_len > 0) {
+                    sel = if (sel + 1 >= filtered_len) 0 else sel + 1;
                 },
                 else => {},
             }
@@ -121,11 +121,11 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
         }
 
         switch (input[0]) {
-            0x10 => if (sel > 0) { // Ctrl+P
-                sel -= 1;
+            0x10 => if (filtered_len > 0) { // Ctrl+P
+                sel = if (sel == 0) filtered_len - 1 else sel - 1;
             },
-            0x0e => if (filtered_len > 0 and sel + 1 < filtered_len) { // Ctrl+N
-                sel += 1;
+            0x0e => if (filtered_len > 0) { // Ctrl+N
+                sel = if (sel + 1 >= filtered_len) 0 else sel + 1;
             },
             0x0d, 0x0a => { // Enter
                 try clearLines(tty, io, prev_lines + header_lines);
