@@ -132,7 +132,20 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
                 if (filtered_len == 0) return null;
                 return filtered[sel];
             },
-            0x03, 0x1b => { // Ctrl+C or Escape
+            0x03 => { // Ctrl+C
+                if (query_len > 0) {
+                    query_len = 0;
+                    sel = 0;
+                } else {
+                    try clearLines(tty, io, prev_lines + header_lines);
+                    return null;
+                }
+            },
+            0x15 => { // Ctrl+U
+                query_len = 0;
+                sel = 0;
+            },
+            0x1b => { // Escape
                 try clearLines(tty, io, prev_lines + header_lines);
                 return null;
             },
