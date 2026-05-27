@@ -68,13 +68,12 @@ pub fn lookup(config: Config, name: []const u8) ?[]const u8 {
     return null;
 }
 
-// NOTE: returns a slice into `raw` when no expansion is needed; only `~/...` paths allocate.
-pub fn expandHome(raw: []const u8, home: []const u8, gpa: Allocator) ![]const u8 {
+pub fn expandHome(raw: []const u8, home: []const u8, gpa: Allocator) ![]u8 {
     if (std.mem.startsWith(u8, raw, "~/")) {
         return std.fmt.allocPrint(gpa, "{s}/{s}", .{ home, raw[2..] });
     }
-    if (std.mem.eql(u8, raw, "~")) return home;
-    return raw;
+    if (std.mem.eql(u8, raw, "~")) return gpa.dupe(u8, home);
+    return gpa.dupe(u8, raw);
 }
 
 // NOTE: non-substituted tokens are views into `term_cmd`; substituted tokens are allocated.
@@ -186,6 +185,7 @@ test "lookup: found and not found" {
 
 test "expandHome: tilde only" {
     const result = try expandHome("~", "/home/user", std.testing.allocator);
+    defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("/home/user", result);
 }
 
@@ -197,6 +197,7 @@ test "expandHome: tilde slash" {
 
 test "expandHome: absolute path unchanged" {
     const result = try expandHome("/srv/data", "/home/user", std.testing.allocator);
+    defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("/srv/data", result);
 }
 
@@ -224,11 +225,12 @@ test "buildArgv: no %s appends dir" {
     try std.testing.expectEqualStrings("/home/user/code", argv[2]);
 }
 
-pub fn addEntry(content: []const u8, name: []const u8, path: []const u8, gpa: Allocator) ![]u8 {
+pub fn addEntry(content: []const u8, name: []const u8, path: []const u8, replace: bool, gpa: Allocator) (AddError || Allocator.Error)![]u8 {
     const has_trailing_nl = content.len > 0 and content[content.len - 1] == '\n';
     const stripped = if (has_trailing_nl) content[0 .. content.len - 1] else content;
 
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
     var in_dirs = false;
     var dirs_exists = false;
     var appended = false;
@@ -266,6 +268,7 @@ pub fn addEntry(content: []const u8, name: []const u8, path: []const u8, gpa: Al
             if (std.mem.indexOfScalar(u8, t, '=')) |eq| {
                 const key = std.mem.trim(u8, t[0..eq], " \t");
                 if (std.mem.eql(u8, key, name)) {
+                    if (!replace) return error.EntryExists;
                     if (!first_out) try out.append(gpa, '\n');
                     first_out = false;
                     try out.appendSlice(gpa, name);
@@ -307,6 +310,7 @@ pub fn addEntry(content: []const u8, name: []const u8, path: []const u8, gpa: Al
     return out.toOwnedSlice(gpa);
 }
 
+pub const AddError = error{EntryExists};
 pub const RemoveError = error{NameNotFound};
 
 pub fn removeEntry(content: []const u8, name: []const u8, gpa: Allocator) (RemoveError || Allocator.Error)![]u8 {
@@ -361,7 +365,7 @@ test "addEntry: append to existing section" {
         \\code = ~/code
         \\
     ;
-    const result = try addEntry(content, "work", "~/work", std.testing.allocator);
+    const result = try addEntry(content, "work", "~/work", false, std.testing.allocator);
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
@@ -381,7 +385,7 @@ test "addEntry: update existing entry" {
         \\work = ~/work
         \\
     ;
-    const result = try addEntry(content, "code", "~/projects", std.testing.allocator);
+    const result = try addEntry(content, "code", "~/projects", true, std.testing.allocator);
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
@@ -397,7 +401,7 @@ test "addEntry: create directories section when missing" {
         \\terminal = "alacritty"
         \\
     ;
-    const result = try addEntry(content, "code", "~/code", std.testing.allocator);
+    const result = try addEntry(content, "code", "~/code", false, std.testing.allocator);
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
@@ -410,7 +414,7 @@ test "addEntry: create directories section when missing" {
 }
 
 test "addEntry: empty file" {
-    const result = try addEntry("", "code", "~/code", std.testing.allocator);
+    const result = try addEntry("", "code", "~/code", false, std.testing.allocator);
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
@@ -444,6 +448,25 @@ test "removeEntry: error on missing entry" {
         \\
     ;
     try std.testing.expectError(error.NameNotFound, removeEntry(content, "missing", std.testing.allocator));
+}
+
+test "removeEntry: removes last entry" {
+    const content = "[directories]\ncode = ~/code\n";
+    const result = try removeEntry(content, "code", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("[directories]\n", result);
+}
+
+test "addEntry: error on duplicate when replace = false" {
+    const content = "[directories]\ncode = ~/code\n";
+    try std.testing.expectError(error.EntryExists, addEntry(content, "code", "~/other", false, std.testing.allocator));
+}
+
+test "parse: launch = exec" {
+    const content = "launch = exec\n[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Launch.exec, cfg.launch);
 }
 
 test "buildArgv: %s embedded in argument" {

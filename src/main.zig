@@ -100,16 +100,20 @@ pub fn main(init: std.process.Init) !void {
             break :blk try allocator.dupe(u8, buf[0..n]);
         };
 
-        const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch "";
-        if (!replace) {
-            const cfg_check = try config.parse(existing, allocator);
-            if (config.lookup(cfg_check, name) != null)
-                std.process.fatal("'{s}' already exists, use -r to replace", .{name});
-        }
-        const new_content = try config.addEntry(existing, name, entry_path, allocator);
+        const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch |err| switch (err) {
+            error.FileNotFound => "",
+            else => |e| return e,
+        };
+        const new_content = config.addEntry(existing, name, entry_path, replace, allocator) catch |err| switch (err) {
+            error.EntryExists => std.process.fatal("'{s}' already exists, use -r to replace", .{name}),
+            else => |e| return e,
+        };
 
         const config_dir = std.fs.path.dirname(config_path) orelse ".";
-        std.Io.Dir.cwd().createDirPath(init.io, config_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(init.io, config_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
         return;
     }
@@ -126,11 +130,8 @@ pub fn main(init: std.process.Init) !void {
         const new_content = try config.removeEntry(existing, name, allocator);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
         const stdout = std.Io.File.stdout();
-        try stdout.writeStreamingAll(init.io, "To re-add: dcd add ");
-        try stdout.writeStreamingAll(init.io, name);
-        try stdout.writeStreamingAll(init.io, " ");
-        try stdout.writeStreamingAll(init.io, removed_path);
-        try stdout.writeStreamingAll(init.io, "\n");
+        const hint = try std.fmt.allocPrint(allocator, "To re-add: dcd add {s} {s}\n", .{ name, removed_path });
+        try stdout.writeStreamingAll(init.io, hint);
         return;
     }
 

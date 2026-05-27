@@ -48,6 +48,7 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
         break :blk 1;
     } else 0;
 
+    // NOTE: input beyond 256 chars is silently dropped; generous for directory names.
     var query_buf: [256]u8 = undefined;
     var query_len: usize = 0;
     var sel: usize = 0;
@@ -58,10 +59,10 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const 
     while (true) {
         const query = query_buf[0..query_len];
 
-        var filtered: [10]usize = undefined;
+        var filtered: [64]usize = undefined;
         var filtered_len: usize = 0;
         for (entries, 0..) |entry, ei| {
-            if (filtered_len >= 10) break;
+            if (filtered_len >= 64) break;
             if (entryMatches(query, entry)) {
                 filtered[filtered_len] = ei;
                 filtered_len += 1;
