@@ -1,6 +1,18 @@
 const std = @import("std");
 const config = @import("config.zig");
 
+fn warnIfNoTerminal(io: std.Io, content: []const u8, config_path: []const u8, gpa: std.mem.Allocator) !void {
+    var cfg = try config.parse(content, gpa);
+    defer cfg.directories.deinit(gpa);
+    if (cfg.terminal == null) {
+        const stderr = std.Io.File.stderr();
+        try stderr.writeStreamingAll(io, "warning: 'terminal' is not set in ");
+        try stderr.writeStreamingAll(io, config_path);
+        try stderr.writeStreamingAll(io, "\n");
+        std.process.exit(1);
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
@@ -33,6 +45,7 @@ pub fn main(init: std.process.Init) !void {
         const config_dir = std.fs.path.dirname(config_path) orelse config_base;
         std.Io.Dir.cwd().createDirPath(init.io, config_dir) catch {};
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
+        try warnIfNoTerminal(init.io, new_content, config_path, allocator);
         return;
     }
 
@@ -47,6 +60,7 @@ pub fn main(init: std.process.Init) !void {
             else => return err,
         };
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
+        try warnIfNoTerminal(init.io, new_content, config_path, allocator);
         return;
     }
 
