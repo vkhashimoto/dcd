@@ -77,9 +77,15 @@ pub fn main(init: std.process.Init) !void {
     const subcmd = cmd_args[0];
 
     if (std.mem.eql(u8, subcmd, "add")) {
-        if (cmd_args.len < 2) std.process.fatal("Usage: dcd add <name> [path]", .{});
-        const name = cmd_args[1];
-        const entry_path: []const u8 = if (cmd_args.len >= 3) cmd_args[2] else blk: {
+        var replace = false;
+        var positional: std.ArrayList([]const u8) = .empty;
+        for (cmd_args[1..]) |arg| {
+            if (std.mem.eql(u8, arg, "-r")) replace = true
+            else try positional.append(allocator, arg);
+        }
+        if (positional.items.len < 1) std.process.fatal("Usage: dcd add [-r] <name> [path]", .{});
+        const name = positional.items[0];
+        const entry_path: []const u8 = if (positional.items.len >= 2) positional.items[1] else blk: {
             var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const n = std.process.currentPath(init.io, &buf) catch |err|
                 std.process.fatal("Cannot get working directory: {s}", .{@errorName(err)});
@@ -87,6 +93,11 @@ pub fn main(init: std.process.Init) !void {
         };
 
         const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch "";
+        if (!replace) {
+            const cfg_check = try config.parse(existing, allocator);
+            if (config.lookup(cfg_check, name) != null)
+                std.process.fatal("'{s}' already exists, use -r to replace", .{name});
+        }
         const new_content = try config.addEntry(existing, name, entry_path, allocator);
 
         const config_dir = std.fs.path.dirname(config_path) orelse ".";
