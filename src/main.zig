@@ -17,22 +17,34 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
 
-    if (args.len < 2) {
-        std.process.fatal("Usage: dcd <name>|add <name> [path]|rm <name>|list", .{});
+    var config_path_override: ?[]const u8 = null;
+    var i: usize = 1;
+    if (i < args.len and std.mem.eql(u8, args[i], "--config")) {
+        i += 1;
+        if (i >= args.len) std.process.fatal("--config requires a path argument", .{});
+        config_path_override = args[i];
+        i += 1;
+    }
+    const cmd_args = args[i..];
+
+    if (cmd_args.len == 0) {
+        std.process.fatal("Usage: dcd [--config <path>] <name>|add <name> [path]|rm <name>|list", .{});
     }
 
-    const subcmd = args[1];
+    const subcmd = cmd_args[0];
 
     const home = init.environ_map.get("HOME") orelse
         std.process.fatal("HOME not set", .{});
-    const config_base = init.environ_map.get("XDG_CONFIG_HOME") orelse
-        try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
-    const config_path = try std.fmt.allocPrint(allocator, "{s}/dcd/config.toml", .{config_base});
+    const config_path = config_path_override orelse blk: {
+        const config_base = init.environ_map.get("XDG_CONFIG_HOME") orelse
+            try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+        break :blk try std.fmt.allocPrint(allocator, "{s}/dcd/config.toml", .{config_base});
+    };
 
     if (std.mem.eql(u8, subcmd, "add")) {
-        if (args.len < 3) std.process.fatal("Usage: dcd add <name> [path]", .{});
-        const name = args[2];
-        const entry_path: []const u8 = if (args.len >= 4) args[3] else blk: {
+        if (cmd_args.len < 2) std.process.fatal("Usage: dcd add <name> [path]", .{});
+        const name = cmd_args[1];
+        const entry_path: []const u8 = if (cmd_args.len >= 3) cmd_args[2] else blk: {
             var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const n = std.process.currentPath(init.io, &buf) catch |err|
                 std.process.fatal("Cannot get working directory: {s}", .{@errorName(err)});
@@ -42,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
         const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch "";
         const new_content = try config.addEntry(existing, name, entry_path, allocator);
 
-        const config_dir = std.fs.path.dirname(config_path) orelse config_base;
+        const config_dir = std.fs.path.dirname(config_path) orelse ".";
         std.Io.Dir.cwd().createDirPath(init.io, config_dir) catch {};
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = config_path, .data = new_content });
         try warnIfNoTerminal(init.io, new_content, config_path, allocator);
@@ -50,8 +62,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, subcmd, "rm")) {
-        if (args.len < 3) std.process.fatal("Usage: dcd rm <name>", .{});
-        const name = args[2];
+        if (cmd_args.len < 2) std.process.fatal("Usage: dcd rm <name>", .{});
+        const name = cmd_args[1];
 
         const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch |err|
             std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
