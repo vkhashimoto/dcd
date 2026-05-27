@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const Launch = enum { exec, spawn };
+pub const Launch = enum { exec, exec_quit, spawn };
 
 pub const Config = struct {
     terminal: ?[]const u8,
@@ -49,7 +49,8 @@ pub fn parse(content: []const u8, gpa: Allocator) !Config {
                 terminal = val;
             } else if (std.mem.eql(u8, key, "launch")) {
                 if (std.mem.eql(u8, val, "spawn")) launch = .spawn
-                else if (std.mem.eql(u8, val, "exec")) launch = .exec;
+                else if (std.mem.eql(u8, val, "exec")) launch = .exec
+                else if (std.mem.eql(u8, val, "exec_quit")) launch = .exec_quit;
             } else if (std.mem.eql(u8, key, "shell")) {
                 shell = val;
             }
@@ -467,6 +468,13 @@ test "parse: launch = exec" {
     var cfg = try parse(content, std.testing.allocator);
     defer cfg.directories.deinit(std.testing.allocator);
     try std.testing.expectEqual(Launch.exec, cfg.launch);
+}
+
+test "parse: launch = exec_quit" {
+    const content = "launch = exec_quit\n[directories]\ncode = ~/code\n";
+    var cfg = try parse(content, std.testing.allocator);
+    defer cfg.directories.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Launch.exec_quit, cfg.launch);
 }
 
 test "buildArgv: %s embedded in argument" {

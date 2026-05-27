@@ -1,3 +1,6 @@
+# launch = spawn      # open a terminal emulator (requires `terminal`)
+# launch = exec       # replace current process with shell in target directory
+# launch = exec_quit  # like exec, but sends SIGHUP to parent shell on exit
 launch = spawn
 
 terminal = "alacritty --working-directory %s"

@@ -9,6 +9,32 @@ fn execShell(io: std.Io, dir: []const u8, shell: []const u8) noreturn {
     std.process.fatal("exec {s}: {s}", .{ shell, @errorName(err) });
 }
 
+fn execShellAndQuit(io: std.Io, dir: []const u8, shell: []const u8) noreturn {
+    const ppid = std.posix.getppid();
+
+    // NOTE: std.posix has no fork wrapper in Zig 0.16; raw syscall is the only option
+    const fork_ret = std.os.linux.fork();
+    switch (std.posix.errno(fork_ret)) {
+        .SUCCESS => {},
+        else => |e| std.process.fatal("fork: {s}", .{@tagName(e)}),
+    }
+
+    if (fork_ret == 0) {
+        execShell(io, dir, shell);
+    }
+
+    const child_pid: std.posix.pid_t = @intCast(fork_ret);
+    var status: u32 = 0;
+    _ = std.os.linux.waitpid(child_pid, &status, 0);
+
+    std.posix.kill(ppid, .HUP) catch |err| switch (err) {
+        error.ProcessNotFound => {},
+        else => std.process.fatal("kill ppid: {s}", .{@errorName(err)}),
+    };
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    std.process.exit(exit_code);
+}
+
 fn resolveShell(config_shell: ?[]const u8, env_shell: ?[]const u8) []const u8 {
     return config_shell orelse env_shell orelse
         std.process.fatal("$SHELL is not set", .{});
@@ -17,6 +43,7 @@ fn resolveShell(config_shell: ?[]const u8, env_shell: ?[]const u8) []const u8 {
 fn doLaunch(cfg: config.Config, io: std.Io, dir: []const u8, allocator: std.mem.Allocator, shell: []const u8) !void {
     switch (cfg.launch) {
         .exec => execShell(io, dir, shell),
+        .exec_quit => execShellAndQuit(io, dir, shell),
         .spawn => {
             const term_cmd = cfg.terminal orelse
                 std.process.fatal("'terminal' must be set when launch = spawn", .{});
@@ -68,7 +95,8 @@ pub fn main(init: std.process.Init) !void {
             .spawn => try std.fmt.allocPrint(allocator, "launch: spawn  terminal: {s}", .{
                 cfg.terminal orelse "(not set)",
             }),
-            .exec => try std.fmt.allocPrint(allocator, "launch: exec  shell: {s}", .{
+            .exec, .exec_quit => |t| try std.fmt.allocPrint(allocator, "launch: {s}  shell: {s}", .{
+                @tagName(t),
                 cfg.shell orelse init.environ_map.get("SHELL") orelse "(not set)",
             }),
         };
