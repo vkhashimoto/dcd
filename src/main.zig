@@ -64,7 +64,15 @@ pub fn main(init: std.process.Init) !void {
             picker_entries[j] = .{ .name = entry.name, .path = entry.path };
         }
 
-        const selection = try picker.run(picker_entries, init.io, allocator);
+        const header = switch (cfg.launch) {
+            .spawn => try std.fmt.allocPrint(allocator, "launch: spawn  terminal: {s}", .{
+                cfg.terminal orelse "(not set)",
+            }),
+            .exec => try std.fmt.allocPrint(allocator, "launch: exec  shell: {s}", .{
+                cfg.shell orelse init.environ_map.get("SHELL") orelse "(not set)",
+            }),
+        };
+        const selection = try picker.run(picker_entries, init.io, allocator, header);
         const idx = selection orelse return;
 
         const raw_dir = cfg.directories.items[idx].path;

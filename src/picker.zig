@@ -25,7 +25,7 @@ fn clearLines(tty: std.Io.File, io: std.Io, n: usize) !void {
     try tty.writeStreamingAll(io, seq);
 }
 
-pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator) !?usize {
+pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator, header: ?[]const u8) !?usize {
     const tty_fd = try std.posix.openat(std.posix.AT.FDCWD, "/dev/tty", .{ .ACCMODE = .RDWR }, 0);
     const tty = std.Io.File{ .handle = tty_fd, .flags = .{ .nonblocking = false } };
     defer tty.close(io);
@@ -41,6 +41,12 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator) !?usize {
     raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
     raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
     try std.posix.tcsetattr(tty_fd, .FLUSH, raw);
+
+    const header_lines: usize = if (header) |h| blk: {
+        try tty.writeStreamingAll(io, h);
+        try tty.writeStreamingAll(io, "\n");
+        break :blk 1;
+    } else 0;
 
     var query_buf: [256]u8 = undefined;
     var query_len: usize = 0;
@@ -122,12 +128,12 @@ pub fn run(entries: []const Entry, io: std.Io, gpa: Allocator) !?usize {
                 sel += 1;
             },
             0x0d, 0x0a => { // Enter
-                try clearLines(tty, io, prev_lines);
+                try clearLines(tty, io, prev_lines + header_lines);
                 if (filtered_len == 0) return null;
                 return filtered[sel];
             },
             0x03, 0x1b => { // Ctrl+C or Escape
-                try clearLines(tty, io, prev_lines);
+                try clearLines(tty, io, prev_lines + header_lines);
                 return null;
             },
             0x7f, 0x08 => { // Backspace
