@@ -183,6 +183,228 @@ test "buildArgv: no %s appends dir" {
     try std.testing.expectEqualStrings("/home/user/code", argv[2]);
 }
 
+pub fn addEntry(content: []const u8, name: []const u8, path: []const u8, gpa: Allocator) ![]u8 {
+    const has_trailing_nl = content.len > 0 and content[content.len - 1] == '\n';
+    const stripped = if (has_trailing_nl) content[0 .. content.len - 1] else content;
+
+    var out: std.ArrayList(u8) = .empty;
+    var in_dirs = false;
+    var dirs_exists = false;
+    var appended = false;
+    var first_out = true;
+
+    var lines = std.mem.splitScalar(u8, stripped, '\n');
+    while (lines.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+
+        if (std.mem.eql(u8, t, "[directories]")) {
+            if (!first_out) try out.append(gpa, '\n');
+            first_out = false;
+            in_dirs = true;
+            dirs_exists = true;
+            try out.appendSlice(gpa, line);
+            continue;
+        }
+
+        if (t.len > 0 and t[0] == '[') {
+            if (in_dirs and !appended) {
+                try out.append(gpa, '\n');
+                try out.appendSlice(gpa, name);
+                try out.appendSlice(gpa, " = ");
+                try out.appendSlice(gpa, path);
+                appended = true;
+            }
+            in_dirs = false;
+            if (!first_out) try out.append(gpa, '\n');
+            first_out = false;
+            try out.appendSlice(gpa, line);
+            continue;
+        }
+
+        if (in_dirs) {
+            if (std.mem.indexOfScalar(u8, t, '=')) |eq| {
+                const key = std.mem.trim(u8, t[0..eq], " \t");
+                if (std.mem.eql(u8, key, name)) {
+                    if (!first_out) try out.append(gpa, '\n');
+                    first_out = false;
+                    try out.appendSlice(gpa, name);
+                    try out.appendSlice(gpa, " = ");
+                    try out.appendSlice(gpa, path);
+                    appended = true;
+                    continue;
+                }
+            }
+        }
+
+        if (!first_out) try out.append(gpa, '\n');
+        first_out = false;
+        try out.appendSlice(gpa, line);
+    }
+
+    if (in_dirs and !appended) {
+        try out.append(gpa, '\n');
+        try out.appendSlice(gpa, name);
+        try out.appendSlice(gpa, " = ");
+        try out.appendSlice(gpa, path);
+    }
+
+    if (!dirs_exists) {
+        if (out.items.len > 0) {
+            if (out.items[out.items.len - 1] != '\n') try out.append(gpa, '\n');
+            try out.append(gpa, '\n');
+        }
+        try out.appendSlice(gpa, "[directories]\n");
+        try out.appendSlice(gpa, name);
+        try out.appendSlice(gpa, " = ");
+        try out.appendSlice(gpa, path);
+    }
+
+    if (out.items.len == 0 or out.items[out.items.len - 1] != '\n') {
+        try out.append(gpa, '\n');
+    }
+
+    return out.toOwnedSlice(gpa);
+}
+
+pub const RemoveError = error{NameNotFound};
+
+pub fn removeEntry(content: []const u8, name: []const u8, gpa: Allocator) (RemoveError || Allocator.Error)![]u8 {
+    const has_trailing_nl = content.len > 0 and content[content.len - 1] == '\n';
+    const stripped = if (has_trailing_nl) content[0 .. content.len - 1] else content;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var in_dirs = false;
+    var removed = false;
+    var first_out = true;
+
+    var lines = std.mem.splitScalar(u8, stripped, '\n');
+    while (lines.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+
+        if (std.mem.eql(u8, t, "[directories]")) {
+            in_dirs = true;
+        } else if (t.len > 0 and t[0] == '[') {
+            in_dirs = false;
+        } else if (in_dirs) {
+            if (std.mem.indexOfScalar(u8, t, '=')) |eq| {
+                const key = std.mem.trim(u8, t[0..eq], " \t");
+                if (std.mem.eql(u8, key, name)) {
+                    removed = true;
+                    continue;
+                }
+            }
+        }
+
+        if (!first_out) try out.append(gpa, '\n');
+        first_out = false;
+        try out.appendSlice(gpa, line);
+    }
+
+    if (!removed) return error.NameNotFound;
+
+    if (has_trailing_nl) {
+        if (out.items.len == 0 or out.items[out.items.len - 1] != '\n') {
+            try out.append(gpa, '\n');
+        }
+    }
+
+    return out.toOwnedSlice(gpa);
+}
+
+test "addEntry: append to existing section" {
+    const content =
+        \\terminal = "alacritty --working-directory %s"
+        \\
+        \\[directories]
+        \\code = ~/code
+        \\
+    ;
+    const result = try addEntry(content, "work", "~/work", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\terminal = "alacritty --working-directory %s"
+        \\
+        \\[directories]
+        \\code = ~/code
+        \\work = ~/work
+        \\
+    , result);
+}
+
+test "addEntry: update existing entry" {
+    const content =
+        \\[directories]
+        \\code = ~/code
+        \\work = ~/work
+        \\
+    ;
+    const result = try addEntry(content, "code", "~/projects", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\[directories]
+        \\code = ~/projects
+        \\work = ~/work
+        \\
+    , result);
+}
+
+test "addEntry: create directories section when missing" {
+    const content =
+        \\terminal = "alacritty"
+        \\
+    ;
+    const result = try addEntry(content, "code", "~/code", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\terminal = "alacritty"
+        \\
+        \\[directories]
+        \\code = ~/code
+        \\
+    , result);
+}
+
+test "addEntry: empty file" {
+    const result = try addEntry("", "code", "~/code", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\[directories]
+        \\code = ~/code
+        \\
+    , result);
+}
+
+test "removeEntry: removes existing entry" {
+    const content =
+        \\[directories]
+        \\code = ~/code
+        \\work = ~/work
+        \\
+    ;
+    const result = try removeEntry(content, "code", std.testing.allocator);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\[directories]
+        \\work = ~/work
+        \\
+    , result);
+}
+
+test "removeEntry: error on missing entry" {
+    const content =
+        \\[directories]
+        \\code = ~/code
+        \\
+    ;
+    try std.testing.expectError(error.NameNotFound, removeEntry(content, "missing", std.testing.allocator));
+}
+
 test "buildArgv: %s embedded in argument" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
