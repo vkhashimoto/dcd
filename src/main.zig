@@ -63,14 +63,33 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
 
     var config_path_override: ?[]const u8 = null;
+    var launch_override: ?config.Launch = null;
     var i: usize = 1;
-    if (i < args.len and std.mem.eql(u8, args[i], "--config")) {
-        i += 1;
-        if (i >= args.len) std.process.fatal("--config requires a path argument", .{});
-        config_path_override = args[i];
-        i += 1;
+    while (i < args.len) {
+        if (std.mem.eql(u8, args[i], "--config")) {
+            i += 1;
+            if (i >= args.len) std.process.fatal("--config requires a path argument", .{});
+            config_path_override = args[i];
+            i += 1;
+        } else if (std.mem.eql(u8, args[i], "--launch")) {
+            i += 1;
+            if (i >= args.len) std.process.fatal("--launch requires a value: exec, exec_quit, or spawn", .{});
+            const val = args[i];
+            launch_override = std.meta.stringToEnum(config.Launch, val) orelse
+                std.process.fatal("--launch: unknown value '{s}', expected exec, exec_quit, or spawn", .{val});
+            i += 1;
+        } else break;
     }
     const cmd_args = args[i..];
+    for (cmd_args) |arg| {
+        if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "--launch"))
+            std.process.fatal("flag '{s}' must appear before the subcommand", .{arg});
+    }
+    if (cmd_args.len > 0 and launch_override != null) {
+        const sub = cmd_args[0];
+        if (std.mem.eql(u8, sub, "add") or std.mem.eql(u8, sub, "rm") or std.mem.eql(u8, sub, "list"))
+            std.process.fatal("--launch cannot be used with '{s}'", .{sub});
+    }
 
     const home = init.environ_map.get("HOME") orelse
         std.process.fatal("HOME not set", .{});
@@ -84,7 +103,8 @@ pub fn main(init: std.process.Init) !void {
         const content = std.Io.Dir.cwd().readFileAlloc(init.io, config_path, allocator, .unlimited) catch |err| {
             std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
         };
-        const cfg = try config.parse(content, allocator);
+        var cfg = try config.parse(content, allocator);
+        if (launch_override) |l| cfg.launch = l;
 
         const picker_entries = try allocator.alloc(picker.Entry, cfg.directories.items.len);
         for (cfg.directories.items, 0..) |entry, j| {
@@ -167,7 +187,8 @@ pub fn main(init: std.process.Init) !void {
         std.process.fatal("Cannot read '{s}': {s}", .{ config_path, @errorName(err) });
     };
 
-    const cfg = try config.parse(content, allocator);
+    var cfg = try config.parse(content, allocator);
+    if (launch_override) |l| cfg.launch = l;
 
     if (std.mem.eql(u8, subcmd, "list")) {
         const stdout = std.Io.File.stdout();
