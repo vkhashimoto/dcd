@@ -30,9 +30,15 @@
           '';
           dontInstall = true;
         };
+        dc = pkgs.runCommand "dc" { } ''
+          mkdir -p $out/bin
+          ln -s ${dcd}/bin/dcd $out/bin/dc
+        '';
       in
       {
         packages.default = dcd;
+        packages.dcd = dcd;
+        packages.dc = dc;
 
         devShells.default = pkgs.mkShell {
           buildInputs = [
